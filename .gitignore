@@ -9,4 +9,8 @@ data/artifacts/
 data/portfolio.json
 data/trades.json
 data/sector_performance.json
+data/session.json
+data/research/
+data/ideas/
+data/sp500_tickers.json
 .DS_Store

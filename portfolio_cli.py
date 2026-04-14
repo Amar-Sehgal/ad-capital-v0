@@ -47,6 +47,13 @@ from src.sectors import SectorTracker, normalize_sector
 from src.data_sources import get_batch_prices, get_stock_info
 from src.report import generate_daily_report
 from src.watchlist import SP500Watchlist
+from src.session import (
+    load_session, save_session, reset_session, record_loop,
+    get_phase, get_loop_interval_seconds,
+    save_research, load_research, load_all_research,
+    save_idea, load_ideas, get_unexecuted_ideas, mark_idea_executed,
+    now_pt,
+)
 
 
 def load_config() -> dict:
@@ -355,6 +362,93 @@ def cmd_watchlist(args, config):
         wl.show_summary()
 
 
+def cmd_session(args, config):
+    """Show or manage trading session state."""
+    if args.reset:
+        state = reset_session()
+        print(f"Session reset. Phase: {state['phase']}")
+        return
+
+    state = load_session()
+    phase = get_phase()
+    interval = get_loop_interval_seconds(phase)
+    t = now_pt().strftime("%I:%M %p PT")
+
+    print(f"\n{'='*60}")
+    print(f" Trading Session — {t}")
+    print(f"{'='*60}")
+    print(f" Phase:              {phase}")
+    print(f" Loop interval:      {interval}s ({interval//60}m)")
+    print(f" Session started:    {state.get('started_at', 'not started')}")
+    print(f" Loop count:         {state['loop_count']}")
+    print(f" Sectors researched: {len(state['sectors_researched'])}/11")
+    print(f"   Done: {', '.join(state['sectors_researched']) or 'none'}")
+    remaining = [s for s in state['research_queue'] if s not in state['sectors_researched']]
+    print(f"   Queue: {', '.join(remaining) or 'all done'}")
+    print(f" Ideas generated:    {state['ideas_generated']}")
+    print(f" Trades today:       {state['trades_executed_today']}")
+
+    if state["notes"]:
+        print(f"\n Last 5 actions:")
+        for n in state["notes"][-5:]:
+            print(f"   [{n['time']}] {n['phase']}: {n['action']}")
+    print(f"{'='*60}\n")
+
+
+def cmd_research(args, config):
+    """View accumulated research notes."""
+    if args.sector:
+        content = load_research(args.sector)
+        if content:
+            print(content)
+        else:
+            print(f"No research for '{args.sector}' today.")
+        return
+
+    all_research = load_all_research()
+    if not all_research:
+        print("No research notes today.")
+        return
+
+    for sector, content in sorted(all_research.items()):
+        lines = content.strip().split('\n')
+        # Show header + first few lines
+        print(f"\n  {sector} ({len(lines)} lines)")
+        for line in lines[:3]:
+            if line.strip():
+                print(f"    {line.strip()}")
+    print(f"\n  Total: {len(all_research)} sectors researched")
+    print(f"  Use --sector <name> for full notes\n")
+
+
+def cmd_ideas(args, config):
+    """View trade ideas."""
+    if args.unexecuted:
+        ideas = get_unexecuted_ideas()
+        label = "Unexecuted"
+    else:
+        ideas = load_ideas()
+        label = "All"
+
+    if not ideas:
+        print("No trade ideas today.")
+        return
+
+    print(f"\n{'='*70}")
+    print(f" {label} Trade Ideas — {date.today().isoformat()}")
+    print(f"{'='*70}")
+    for i in ideas:
+        exec_mark = " [DONE]" if i.get("executed") else ""
+        print(f"\n  #{i['id']}{exec_mark} | {i.get('action', '?')} {i.get('ticker', '?')} | "
+              f"{i.get('sector', '?')} | Conv: {i.get('conviction', '?')}")
+        print(f"  Thesis: {i.get('thesis', 'N/A')}")
+        if i.get("catalysts"):
+            print(f"  Catalysts: {', '.join(i['catalysts'])}")
+        if i.get("target_weight"):
+            print(f"  Target: {i['target_weight']}% of portfolio")
+    print(f"\n{'='*70}\n")
+
+
 def cmd_report(args, config):
     """Generate daily markdown report."""
     pm = PortfolioManager(config)
@@ -417,6 +511,18 @@ def main():
     p_watch.add_argument("--sector", help="Filter by sector")
     p_watch.add_argument("--scan", action="store_true", help="Scan for movers")
 
+    # session
+    p_sess = sub.add_parser("session", help="Show/manage trading session")
+    p_sess.add_argument("--reset", action="store_true", help="Reset session for today")
+
+    # research
+    p_research = sub.add_parser("research", help="View research notes")
+    p_research.add_argument("--sector", help="View specific sector research")
+
+    # ideas
+    p_ideas = sub.add_parser("ideas", help="View trade ideas")
+    p_ideas.add_argument("--unexecuted", action="store_true", help="Show only unexecuted ideas")
+
     # report
     sub.add_parser("report", help="Generate daily report")
 
@@ -435,6 +541,9 @@ def main():
         "sectors": cmd_sectors,
         "history": cmd_history,
         "watchlist": cmd_watchlist,
+        "session": cmd_session,
+        "research": cmd_research,
+        "ideas": cmd_ideas,
         "report": cmd_report,
     }
     commands[args.command](args, config)
