@@ -10,6 +10,9 @@ data/portfolio.json
 data/trades.json
 data/sector_performance.json
 data/session.json
+data/quant_portfolio.json
+data/quant_trades.json
+data/quant_strategies.json
 data/research/
 data/ideas/
 data/sp500_tickers.json

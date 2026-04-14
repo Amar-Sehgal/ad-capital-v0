@@ -4,6 +4,8 @@ portfolio:
   num_positions: 15
   max_sector_weight: 0.35
   initial_capital: 1000.0
+  sector_fund_capital: 700.0   # 70% discretionary sector fund
+  quant_book_capital: 300.0    # 30% systematic quant book
   benchmark: SPY
   min_expected_return: 0.0  # every position must have positive expected return
 

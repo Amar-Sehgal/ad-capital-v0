@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.portfolio import PortfolioManager
 from src.sectors import SectorTracker, normalize_sector
+from src.quant import QuantBook, compute_signals, scan_signals, STRATEGIES
 from src.data_sources import get_batch_prices, get_stock_info
 from src.report import generate_daily_report
 from src.watchlist import SP500Watchlist
@@ -70,11 +71,14 @@ def cmd_init(args, config):
         print(f"Total value: ${state['total_value']:,.2f}")
         print("Use --force to reinitialize (WARNING: destroys existing portfolio)")
         return
+    sect_capital = config["portfolio"].get("sector_fund_capital", config["portfolio"]["initial_capital"] * 0.7)
+    quant_capital = config["portfolio"].get("quant_book_capital", config["portfolio"]["initial_capital"] * 0.3)
+
     state = {
         "inception_date": date.today().isoformat(),
-        "cash": config["portfolio"]["initial_capital"],
+        "cash": sect_capital,
         "positions": {},
-        "total_value": config["portfolio"]["initial_capital"],
+        "total_value": sect_capital,
         "benchmark_start_price": None,
     }
     # Get benchmark start price
@@ -83,7 +87,24 @@ def cmd_init(args, config):
         state["benchmark_start_price"] = prices[config["portfolio"]["benchmark"]]
     pm.save(state)
     pm.save_trades([])
-    print(f"Portfolio initialized: ${config['portfolio']['initial_capital']:,.2f} cash")
+
+    # Initialize quant book
+    qb = QuantBook(capital_allocation=quant_capital)
+    qb_state = {
+        "inception_date": date.today().isoformat(),
+        "cash": quant_capital,
+        "positions": {},
+        "total_value": quant_capital,
+        "realized_pnl": 0,
+        "total_trades": 0,
+        "winning_trades": 0,
+    }
+    qb.save(qb_state)
+    qb.save_trades([])
+
+    print(f"Portfolio initialized: ${config['portfolio']['initial_capital']:,.2f} total")
+    print(f"  Sector Fund: ${sect_capital:,.2f}")
+    print(f"  Quant Book:  ${quant_capital:,.2f}")
     print(f"Benchmark: {config['portfolio']['benchmark']} @ ${state['benchmark_start_price']}")
     print(f"Inception: {state['inception_date']}")
 
@@ -449,6 +470,160 @@ def cmd_ideas(args, config):
     print(f"\n{'='*70}\n")
 
 
+def cmd_quant(args, config):
+    """Quant book operations."""
+    qb = QuantBook(capital_allocation=config["portfolio"]["initial_capital"] * 0.3)
+
+    if args.quant_action == "status":
+        print(qb.status())
+
+    elif args.quant_action == "trade":
+        state = qb.trade(
+            ticker=args.ticker.upper(),
+            action=args.action.upper(),
+            shares=float(args.shares),
+            price=float(args.price) if args.price else None,
+            strategy=args.strategy,
+            signal=args.signal or "",
+            entry_rule=args.entry_rule or "",
+            exit_rule=args.exit_rule or "",
+        )
+        print(f"  Quant trade executed: {args.action.upper()} {args.shares} {args.ticker.upper()}")
+
+    elif args.quant_action == "signals":
+        ticker = args.ticker.upper()
+        sigs = compute_signals(ticker)
+        if sigs.get("error"):
+            print(f"Error: {sigs['error']}")
+            return
+        print(f"\n  {ticker} @ ${sigs['price']}")
+        print(f"  Daily: {sigs['daily_return_pct']:+.2f}% | RSI: {sigs['rsi']:.1f} | "
+              f"MACD: {sigs['macd']:.3f}")
+        print(f"  BB: {sigs['bb_pct']:.3f} (${sigs['bb_lower']}-${sigs['bb_upper']})")
+        print(f"  SMA20: ${sigs['sma_20']} | SMA50: {sigs.get('sma_50') or 'N/A'}")
+        print(f"  Volume ratio: {sigs['volume_ratio']:.2f}x | Gap: {sigs['gap_pct']:+.2f}%")
+        print(f"  ATR: ${sigs['atr']} ({sigs['atr_pct']:.2f}%)")
+        if sigs["signals"]:
+            print(f"  SIGNALS: {', '.join(sigs['signals'])}")
+        else:
+            print(f"  No active signals")
+        print()
+
+    elif args.quant_action == "scan":
+        tickers = args.tickers.split(",") if args.tickers else []
+        if not tickers:
+            # Default: scan current sector fund holdings + quant holdings
+            pm = PortfolioManager(config)
+            pstate = pm.load()
+            qstate = qb.load()
+            tickers = list(set(
+                list(pstate.get("positions", {}).keys()) +
+                list(qstate.get("positions", {}).keys())
+            ))
+        if not tickers:
+            print("No tickers to scan. Provide --tickers or have open positions.")
+            return
+        print(f"Scanning {len(tickers)} tickers for signals...")
+        results = scan_signals(tickers, signal_filter=args.filter)
+        if not results:
+            print("No signals found.")
+            return
+        for s in results:
+            sigs_str = ", ".join(s["signals"])
+            print(f"  {s['ticker']:<8} ${s['price']:>8.2f} ({s['daily_return_pct']:+.2f}%) "
+                  f"RSI:{s['rsi']:.0f} Vol:{s['volume_ratio']:.1f}x -> {sigs_str}")
+
+    elif args.quant_action == "strategies":
+        print(f"\n{'='*60}")
+        print(f" Registered Quant Strategies")
+        print(f"{'='*60}")
+        for key, strat in STRATEGIES.items():
+            print(f"\n  {strat['name']} [{key}]")
+            print(f"  {strat['description']}")
+            print(f"  Holding: {strat['holding_period']}")
+            print(f"  Signals: {', '.join(strat['signals'])}")
+        print(f"\n{'='*60}\n")
+
+    elif args.quant_action == "history":
+        trades = qb.load_trades()
+        if not trades:
+            print("No quant trades yet.")
+            return
+        last_n = args.last or len(trades)
+        recent = trades[-last_n:]
+        print(f"\n{'='*80}")
+        print(f" Quant Trade History (last {len(recent)} of {len(trades)})")
+        print(f"{'='*80}")
+        for t in recent:
+            pnl_str = f" P&L: ${t['realized_pnl']:+,.2f}" if t.get("realized_pnl") is not None else ""
+            print(f"\n  #{t['id']} | {t['date']} {t.get('time', '')} | "
+                  f"{t['action']} {t['shares']:.2f} {t['ticker']} @ ${t['price']:,.2f}{pnl_str}")
+            print(f"     Strategy: {t.get('strategy', '?')} | Signal: {t.get('signal', '?')}")
+            print(f"     Entry: {t.get('entry_rule', '?')} | Exit: {t.get('exit_rule', '?')}")
+        print(f"\n{'='*80}\n")
+
+
+def cmd_overview(args, config):
+    """Combined view of sector fund + quant book."""
+    pm = PortfolioManager(config)
+    sect_state = pm.load()
+    qb = QuantBook(capital_allocation=config["portfolio"]["initial_capital"] * 0.3)
+    qb_state = qb.load()
+
+    sect_tickers = list(sect_state.get("positions", {}).keys())
+    qb_tickers = list(qb_state.get("positions", {}).keys())
+    all_tickers = list(set(sect_tickers + qb_tickers + [config["portfolio"]["benchmark"]]))
+    prices = get_batch_prices(all_tickers) if all_tickers else {}
+
+    # Sector fund value
+    sect_total = sect_state.get("cash", 0)
+    for t, p in sect_state.get("positions", {}).items():
+        sect_total += p["shares"] * prices.get(t, p.get("last_price", 0))
+
+    # Quant book value
+    qb_total = qb_state.get("cash", 0)
+    for t, p in qb_state.get("positions", {}).items():
+        qb_total += p["shares"] * prices.get(t, p.get("last_price", 0))
+
+    combined = sect_total + qb_total
+    initial = config["portfolio"]["initial_capital"]
+    sect_capital = config["portfolio"].get("sector_fund_capital", initial * 0.7)
+    quant_capital = config["portfolio"].get("quant_book_capital", initial * 0.3)
+    combined_ret = ((combined / initial) - 1) * 100
+    sect_ret = ((sect_total / sect_capital) - 1) * 100 if sect_capital > 0 else 0
+    qb_ret = ((qb_total / quant_capital) - 1) * 100 if quant_capital > 0 else 0
+
+    bench = prices.get(config["portfolio"]["benchmark"], 0)
+    bench_start = sect_state.get("benchmark_start_price", bench)
+    bench_ret = ((bench / bench_start) - 1) * 100 if bench_start and bench_start > 0 else 0
+
+    print(f"\n{'='*60}")
+    print(f" AD Capital v0 — Combined Overview ({date.today().isoformat()})")
+    print(f"{'='*60}")
+    print(f"")
+    print(f" {'Book':<20} {'Value':>12} {'Return':>10} {'Positions':>10}")
+    print(f" {'-'*20} {'-'*12} {'-'*10} {'-'*10}")
+    print(f" {'Sector Fund':<20} ${sect_total:>10,.2f} {sect_ret:>+9.2f}% "
+          f"{len(sect_state.get('positions', {})):>10}")
+    print(f" {'Quant Book':<20} ${qb_total:>10,.2f} {qb_ret:>+9.2f}% "
+          f"{len(qb_state.get('positions', {})):>10}")
+    print(f" {'-'*20} {'-'*12} {'-'*10} {'-'*10}")
+    print(f" {'COMBINED':<20} ${combined:>10,.2f} {combined_ret:>+9.2f}% "
+          f"{len(sect_state.get('positions', {})) + len(qb_state.get('positions', {})):>10}")
+    print(f"")
+    print(f" SPY Benchmark:     {bench_ret:>+10.2f}%")
+    print(f" Alpha:             {combined_ret - bench_ret:>+10.2f}%")
+
+    win_rate = 0
+    total_trades = qb_state.get("total_trades", 0)
+    if total_trades > 0:
+        win_rate = qb_state.get("winning_trades", 0) / total_trades * 100
+    print(f"")
+    print(f" Quant Win Rate:    {win_rate:>9.1f}% ({qb_state.get('winning_trades', 0)}/{total_trades})")
+    print(f" Quant Realized:    ${qb_state.get('realized_pnl', 0):>+10,.2f}")
+    print(f"{'='*60}\n")
+
+
 def cmd_report(args, config):
     """Generate daily markdown report."""
     pm = PortfolioManager(config)
@@ -523,6 +698,31 @@ def main():
     p_ideas = sub.add_parser("ideas", help="View trade ideas")
     p_ideas.add_argument("--unexecuted", action="store_true", help="Show only unexecuted ideas")
 
+    # quant
+    p_quant = sub.add_parser("quant", help="Quant book operations")
+    q_sub = p_quant.add_subparsers(dest="quant_action")
+    q_sub.add_parser("status", help="Show quant book status")
+    q_sub.add_parser("strategies", help="List registered strategies")
+    q_trade = q_sub.add_parser("trade", help="Execute a quant trade")
+    q_trade.add_argument("action", choices=["BUY", "SELL", "buy", "sell"])
+    q_trade.add_argument("ticker")
+    q_trade.add_argument("shares", type=float)
+    q_trade.add_argument("--price", type=float, required=True)
+    q_trade.add_argument("--strategy", required=True, help="Strategy name (e.g., mean_reversion)")
+    q_trade.add_argument("--signal", help="Signal that triggered the trade")
+    q_trade.add_argument("--entry-rule", help="Entry rule description")
+    q_trade.add_argument("--exit-rule", help="Exit rule description")
+    q_signals = q_sub.add_parser("signals", help="Compute signals for a ticker")
+    q_signals.add_argument("ticker")
+    q_scan = q_sub.add_parser("scan", help="Scan tickers for signals")
+    q_scan.add_argument("--tickers", help="Comma-separated tickers (default: current holdings)")
+    q_scan.add_argument("--filter", help="Filter by signal name")
+    q_hist = q_sub.add_parser("history", help="Show quant trade history")
+    q_hist.add_argument("--last", type=int, help="Show last N trades")
+
+    # overview (combined view)
+    sub.add_parser("overview", help="Combined sector fund + quant book view")
+
     # report
     sub.add_parser("report", help="Generate daily report")
 
@@ -544,6 +744,8 @@ def main():
         "session": cmd_session,
         "research": cmd_research,
         "ideas": cmd_ideas,
+        "quant": cmd_quant,
+        "overview": cmd_overview,
         "report": cmd_report,
     }
     commands[args.command](args, config)
