@@ -44,7 +44,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.portfolio import PortfolioManager
 from src.sectors import SectorTracker, normalize_sector
-from src.quant import QuantBook, compute_signals, scan_signals, STRATEGIES
+from src.quant import (
+    QuantBook, compute_signals, scan_signals, STRATEGIES,
+    multifactor_v3_score, trend_pullback_signal, scan_multifactor_v3,
+)
 from src.data_sources import get_batch_prices, get_stock_info
 from src.report import generate_daily_report
 from src.watchlist import SP500Watchlist
@@ -544,6 +547,49 @@ def cmd_quant(args, config):
             print(f"  Signals: {', '.join(strat['signals'])}")
         print(f"\n{'='*60}\n")
 
+    elif args.quant_action == "mfv3":
+        # MultiFactorV3 scoring
+        if args.ticker:
+            r = multifactor_v3_score(args.ticker.upper())
+            if not r:
+                print(f"No data for {args.ticker.upper()}")
+                return
+            f = r["factors"]
+            print(f"\n  MultiFactorV3: {r['ticker']} @ ${r['price']}")
+            print(f"  Score: {r['score']}/{r['max_score']} -> {r['signal'].upper()}")
+            print(f"  Factors:")
+            print(f"    SMA(10/30):  {f['sma_10_30']}")
+            print(f"    SMA(20/60):  {f['sma_20_60']}")
+            print(f"    SMA(40/100): {f['sma_40_100']}")
+            print(f"    RSI:         {f['rsi']} ({f['rsi_zone']})")
+            print(f"    Volume:      {f['volume_ratio']}x avg ({'elevated' if f['volume_elevated'] else 'normal'})")
+            print(f"    ADX:         {f['adx']} ({'trending' if f['trending'] else 'not trending'})")
+            print()
+        elif args.tickers:
+            tickers = args.tickers.split(",")
+            results = scan_multifactor_v3(tickers)
+            for r in results:
+                sig = r["signal"].replace("mfv3_", "").upper()
+                print(f"  {r['ticker']:<8} ${r['price']:>8.2f}  Score: {r['score']}/6  -> {sig}")
+        else:
+            print("Provide --ticker AVGO or --tickers AVGO,NVDA,TSM")
+
+    elif args.quant_action == "pullback":
+        if not args.ticker:
+            print("Provide --ticker")
+            return
+        r = trend_pullback_signal(args.ticker.upper())
+        if not r:
+            print(f"No data for {args.ticker.upper()}")
+            return
+        print(f"\n  TrendPullback: {r['ticker']} @ ${r['price']}")
+        print(f"  Signal: {r['signal'].upper()}")
+        print(f"  SMA(20): ${r['sma_20']} | SMA(50): ${r['sma_50']}")
+        print(f"  ADX: {r['adx']} | ATR: ${r['atr']}")
+        print(f"  Chandelier Stop: ${r['chandelier_stop']}")
+        print(f"  Uptrend: {r['in_uptrend']} | At Pullback: {r['at_pullback']}")
+        print()
+
     elif args.quant_action == "history":
         trades = qb.load_trades()
         if not trades:
@@ -717,6 +763,11 @@ def main():
     q_scan = q_sub.add_parser("scan", help="Scan tickers for signals")
     q_scan.add_argument("--tickers", help="Comma-separated tickers (default: current holdings)")
     q_scan.add_argument("--filter", help="Filter by signal name")
+    q_mfv3 = q_sub.add_parser("mfv3", help="MultiFactorV3 scoring (ported from stock_prediction)")
+    q_mfv3.add_argument("--ticker", help="Score single ticker")
+    q_mfv3.add_argument("--tickers", help="Comma-separated tickers to batch score")
+    q_pb = q_sub.add_parser("pullback", help="TrendPullback analysis (ported from stock_prediction)")
+    q_pb.add_argument("--ticker", required=True, help="Ticker to analyze")
     q_hist = q_sub.add_parser("history", help="Show quant trade history")
     q_hist.add_argument("--last", type=int, help="Show last N trades")
 

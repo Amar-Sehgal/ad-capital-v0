@@ -30,41 +30,71 @@ QUANT_STRATEGIES_FILE = "data/quant_strategies.json"
 # ---------------------------------------------------------------------------
 
 STRATEGIES = {
+    "multifactor_v3": {
+        "name": "MultiFactorV3 (ported from stock_prediction)",
+        "description": "6-factor composite: 3 ensemble MA speeds + RSI + volume + ADX. "
+                       "Backtested Sharpe ~1.39 on S&P 500 tech. Currently scanning 100 stocks daily.",
+        "holding_period": "1-4 weeks",
+        "signals": ["mfv3_buy", "mfv3_sell", "mfv3_hold"],
+        "entry": "Score >= 4/6 factors",
+        "exit": "Score <= 1/6 factors",
+    },
+    "trend_pullback": {
+        "name": "TrendPullback (ported from stock_prediction)",
+        "description": "Buy pullbacks to SMA(20) in confirmed uptrends (price > SMA(50), ADX > 25). "
+                       "Chandelier trailing stop exit. Better entry timing than crossover.",
+        "holding_period": "1-4 weeks",
+        "signals": ["pullback_entry", "chandelier_exit"],
+        "entry": "Uptrend confirmed + pullback to SMA(20)",
+        "exit": "Chandelier stop: highest_high(22) - 2.5*ATR",
+    },
     "mean_reversion": {
         "name": "Mean Reversion",
         "description": "Buy oversold stocks (RSI < 30 or >2 std dev below 20d SMA), sell on reversion",
         "holding_period": "1-5 days",
         "signals": ["rsi_oversold", "bollinger_lower", "volume_spike_down"],
+        "entry": "RSI < 30 or price < BB lower",
+        "exit": "RSI > 50 or price > SMA(20)",
     },
     "momentum": {
         "name": "Momentum",
         "description": "Buy stocks breaking out on volume above 20d MA with positive momentum",
         "holding_period": "1-10 days",
         "signals": ["breakout_volume", "macd_cross", "rsi_momentum"],
+        "entry": "Price breaks above SMA(20) on 2x volume",
+        "exit": "Price closes below SMA(20) or RSI > 75",
     },
     "gap_fill": {
         "name": "Gap Fill",
         "description": "Trade overnight gaps that statistically tend to fill during the session",
         "holding_period": "intraday",
         "signals": ["gap_up_fade", "gap_down_fill"],
+        "entry": "Gap > 1% from previous close",
+        "exit": "Gap fills to previous close or EOD",
     },
     "earnings_drift": {
         "name": "Post-Earnings Drift",
         "description": "Ride post-earnings momentum for stocks that beat/miss significantly",
         "holding_period": "1-5 days",
         "signals": ["earnings_beat_drift", "earnings_miss_drift"],
+        "entry": "Earnings beat/miss > 5%, momentum continues",
+        "exit": "3-5 day hold or reversal",
     },
     "stat_arb": {
         "name": "Statistical Arbitrage",
         "description": "Pairs/relative value trades on correlated stocks that diverge",
         "holding_period": "1-10 days",
         "signals": ["pair_divergence", "sector_relative_value"],
+        "entry": "Z-score > 2 on spread between correlated pair",
+        "exit": "Spread reverts to mean",
     },
     "market_making": {
         "name": "Market Making (simulated)",
         "description": "Capture bid-ask spread on high-volume names. Paper-traded as limit order simulation.",
         "holding_period": "intraday",
         "signals": ["spread_capture", "depth_imbalance"],
+        "entry": "Limit order at bid/ask in high-volume name",
+        "exit": "Fill on opposite side or timeout",
     },
 }
 
@@ -199,6 +229,206 @@ def scan_signals(tickers: list[str], signal_filter: str | None = None) -> list[d
         elif sigs.get("signals"):
             results.append(sigs)
     results.sort(key=lambda s: len(s.get("signals", [])), reverse=True)
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Ported strategies from ~/personal/stock_prediction/strategies.py
+# Adapted from backtesting.py Strategy classes to standalone signal generators.
+# ---------------------------------------------------------------------------
+
+def _adx(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14) -> pd.Series:
+    """Average Directional Index — ported from stock_prediction."""
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+    plus_dm = plus_dm.where(plus_dm > 0, 0)
+    minus_dm = minus_dm.where(minus_dm > 0, 0)
+    mask = plus_dm > minus_dm
+    minus_dm = minus_dm.where(~(mask & (plus_dm > 0)), 0)
+    plus_dm = plus_dm.where(~(~mask & (minus_dm > 0)), 0)
+
+    tr = pd.concat([
+        high - low,
+        (high - close.shift(1)).abs(),
+        (low - close.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    atr_s = tr.rolling(n).mean()
+
+    plus_di = 100 * plus_dm.ewm(alpha=1 / n, min_periods=n).mean() / atr_s
+    minus_di = 100 * minus_dm.ewm(alpha=1 / n, min_periods=n).mean() / atr_s
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    return dx.ewm(alpha=1 / n, min_periods=n).mean()
+
+
+def multifactor_v3_score(ticker: str) -> dict | None:
+    """Run MultiFactorV3 scoring on a ticker.
+
+    Ported from stock_prediction. 6-factor composite:
+      1-3. Ensemble MA trend (10/30, 20/60, 40/100)
+      4.   RSI in buy zone (30-70)
+      5.   Volume above 20d average
+      6.   ADX > 25 (trending)
+
+    Returns dict with score, factor breakdown, and signal.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="1y")
+        if hist.empty or len(hist) < 100:
+            return None
+
+        close = hist["Close"]
+        volume = hist["Volume"]
+        high = hist["High"]
+        low = hist["Low"]
+
+        price = float(close.iloc[-1])
+
+        # Ensemble MAs
+        sma_10 = float(close.rolling(10).mean().iloc[-1])
+        sma_30 = float(close.rolling(30).mean().iloc[-1])
+        sma_20 = float(close.rolling(20).mean().iloc[-1])
+        sma_60 = float(close.rolling(60).mean().iloc[-1])
+        sma_40 = float(close.rolling(40).mean().iloc[-1])
+        sma_100 = float(close.rolling(100).mean().iloc[-1])
+
+        # RSI
+        delta = close.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1 / 14, min_periods=14).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, min_periods=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        rsi_val = float(rsi.iloc[-1])
+
+        # ADX
+        adx = _adx(high, low, close, 14)
+        adx_val = float(adx.iloc[-1])
+
+        # Volume
+        vol_avg = float(volume.rolling(20).mean().iloc[-1])
+        cur_vol = float(volume.iloc[-1])
+
+        # Score
+        factors = {}
+        score = 0
+        factors["sma_10_30"] = "BULL" if sma_10 > sma_30 else "BEAR"
+        if sma_10 > sma_30:
+            score += 1
+        factors["sma_20_60"] = "BULL" if sma_20 > sma_60 else "BEAR"
+        if sma_20 > sma_60:
+            score += 1
+        factors["sma_40_100"] = "BULL" if sma_40 > sma_100 else "BEAR"
+        if sma_40 > sma_100:
+            score += 1
+        factors["rsi"] = round(rsi_val, 1)
+        factors["rsi_zone"] = "OK" if 30 < rsi_val < 70 else "EXTREME"
+        if 30 < rsi_val < 70:
+            score += 1
+        factors["volume_ratio"] = round(cur_vol / vol_avg, 2) if vol_avg > 0 else 0
+        factors["volume_elevated"] = cur_vol > vol_avg * 1.1
+        if cur_vol > vol_avg * 1.1:
+            score += 1
+        factors["adx"] = round(adx_val, 1)
+        factors["trending"] = adx_val > 25
+        if not pd.isna(adx_val) and adx_val > 25:
+            score += 1
+
+        # Signal
+        if score >= 4:
+            signal = "mfv3_buy"
+        elif score <= 1:
+            signal = "mfv3_sell"
+        else:
+            signal = "mfv3_hold"
+
+        return {
+            "ticker": ticker,
+            "price": round(price, 2),
+            "score": score,
+            "max_score": 6,
+            "signal": signal,
+            "factors": factors,
+        }
+    except Exception as e:
+        log.debug("MFV3 scoring failed for %s: %s", ticker, e)
+        return None
+
+
+def trend_pullback_signal(ticker: str) -> dict | None:
+    """Run TrendPullback analysis on a ticker.
+
+    Ported from stock_prediction. Detects pullback entries in confirmed uptrends.
+    Entry: price > SMA(50), ADX > 25, price within 2% of SMA(20)
+    Exit: Chandelier stop = highest_high(22) - 2.5*ATR(14)
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="6mo")
+        if hist.empty or len(hist) < 60:
+            return None
+
+        close = hist["Close"]
+        high = hist["High"]
+        low = hist["Low"]
+
+        price = float(close.iloc[-1])
+        sma_50 = float(close.rolling(50).mean().iloc[-1])
+        sma_20 = float(close.rolling(20).mean().iloc[-1])
+
+        # ADX
+        adx = _adx(high, low, close, 14)
+        adx_val = float(adx.iloc[-1])
+
+        # ATR
+        tr = pd.concat([
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ], axis=1).max(axis=1)
+        atr_val = float(tr.rolling(14).mean().iloc[-1])
+
+        # Chandelier stop
+        highest_22 = float(high.rolling(22).max().iloc[-1])
+        chandelier_stop = highest_22 - 2.5 * atr_val
+
+        in_uptrend = price > sma_50 and adx_val > 25
+        at_pullback = price <= sma_20 * 1.02
+        above_stop = price > chandelier_stop
+
+        if in_uptrend and at_pullback:
+            signal = "pullback_entry"
+        elif not above_stop:
+            signal = "chandelier_exit"
+        elif in_uptrend:
+            signal = "in_trend"
+        else:
+            signal = "no_trend"
+
+        return {
+            "ticker": ticker,
+            "price": round(price, 2),
+            "signal": signal,
+            "sma_20": round(sma_20, 2),
+            "sma_50": round(sma_50, 2),
+            "adx": round(adx_val, 1),
+            "atr": round(atr_val, 2),
+            "chandelier_stop": round(chandelier_stop, 2),
+            "in_uptrend": in_uptrend,
+            "at_pullback": at_pullback,
+        }
+    except Exception as e:
+        log.debug("TrendPullback failed for %s: %s", ticker, e)
+        return None
+
+
+def scan_multifactor_v3(tickers: list[str]) -> list[dict]:
+    """Run MultiFactorV3 on a list of tickers. Returns sorted by score."""
+    results = []
+    for ticker in tickers:
+        r = multifactor_v3_score(ticker)
+        if r:
+            results.append(r)
+    results.sort(key=lambda r: r["score"], reverse=True)
     return results
 
 
