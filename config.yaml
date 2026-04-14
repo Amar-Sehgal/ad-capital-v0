@@ -1,0 +1,28 @@
+# Adversarial Alpha - Portfolio Configuration
+
+portfolio:
+  num_positions: 15
+  max_sector_weight: 0.35
+  initial_capital: 50000.0
+  benchmark: SPY
+  min_expected_return: 0.0  # every position must have positive expected return
+
+pipeline:
+  num_screen_candidates: 50
+  num_bull_agents: 15
+  num_bear_agents: 15
+  news_lookback_days: 7
+  max_concurrent_agents: 10  # throttle parallel API calls
+
+model:
+  # Use sonnet for bulk agent calls (cost-effective), opus for final optimizer
+  screener: claude-sonnet-4-6
+  research: claude-sonnet-4-6
+  modeler: claude-sonnet-4-6
+  optimizer: claude-sonnet-4-6
+
+data:
+  portfolio_file: data/portfolio.json
+  trades_file: data/trades.json
+  snapshots_dir: data/snapshots
+  reports_dir: data/reports

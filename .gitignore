@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+data/snapshots/
+data/reports/
+data/artifacts/
+data/portfolio.json
+data/trades.json
+data/sector_performance.json
+.DS_Store

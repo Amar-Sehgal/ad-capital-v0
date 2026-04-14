@@ -1,0 +1,62 @@
+name: Daily Portfolio Pipeline
+
+on:
+  schedule:
+    # Run full rebalance at 6:00 AM ET (10:00 UTC) on weekdays
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Pipeline mode'
+        required: true
+        default: 'snapshot'
+        type: choice
+        options:
+          - snapshot
+          - full-rebalance
+          - intraday
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore portfolio state
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/portfolio.json
+            data/trades.json
+            data/sector_performance.json
+          key: portfolio-state-${{ github.ref }}
+          restore-keys: portfolio-state-
+
+      - name: Run pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          MODE="${{ github.event.inputs.mode || 'snapshot' }}"
+          if [ "$MODE" = "full-rebalance" ]; then
+            python run_pipeline.py --force-rebalance
+          elif [ "$MODE" = "intraday" ]; then
+            python run_pipeline.py --intraday
+          else
+            python run_pipeline.py --snapshot-only
+          fi
+
+      - name: Commit updated portfolio state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ -f
+          git diff --cached --quiet || git commit -m "Daily portfolio update $(date +%Y-%m-%d)"
+          git push
