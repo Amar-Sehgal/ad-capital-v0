@@ -3,7 +3,7 @@
 portfolio:
   num_positions: 15
   max_sector_weight: 0.35
-  initial_capital: 50000.0
+  initial_capital: 1000.0
   benchmark: SPY
   min_expected_return: 0.0  # every position must have positive expected return
 

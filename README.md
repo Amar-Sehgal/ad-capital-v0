@@ -1,115 +1,88 @@
 # AD Capital v0
 
-Multi-agent adversarial stock portfolio. Claude agents debate bull/bear cases across all 11 GICS sectors to construct a concentrated 15-stock paper portfolio.
+AI-driven paper trading portfolio. Claude Code does the research (web search, news, fundamentals analysis) and uses a CLI toolkit to manage a $1,000 paper portfolio across all 11 GICS sectors of the S&P 500.
 
 ## How It Works
 
-A 4-stage pipeline inspired by [The Claude Portfolio](https://x.com/theaiportfolios):
+**Claude Code is the trader.** It uses web search for real-time news and research, analyzes fundamentals via yfinance, and makes trading decisions. The Python CLI handles portfolio state, trade logging, and reporting.
 
-### Stage 1 — Screening
-Scans the Russell 1000 universe, fetches fundamentals via yfinance, and uses Claude to score and rank stocks. Enforces minimum representation across all 11 GICS sectors so the portfolio never ignores an entire industry.
+### Research Approach
+- Adversarial thinking: considers both bull and bear cases for every position
+- Covers all 11 GICS sectors (Technology, Healthcare, Financials, Consumer Discretionary, Communication Services, Industrials, Consumer Staples, Energy, Utilities, Real Estate, Materials)
+- 7-day rolling news window for catalyst identification
+- S&P 500 watchlist tracks movers and sector rotation across all 500 stocks
 
-### Stage 2 — Adversarial Research
-For each of the top ~50 candidates, two Claude agents launch in parallel:
-- **Bull agent**: makes the strongest possible case for buying
-- **Bear agent**: makes the strongest possible case for selling
-
-Each agent receives the stock's fundamentals and recent news (last 7 days only). The adversarial structure prevents confirmation bias.
-
-### Stage 3 — Scenario Modeling
-A separate Claude agent synthesizes each bull/bear debate into probability-weighted scenarios (bull/base/bear) with price targets at 1, 3, 6, and 12 months.
-
-### Stage 4 — Portfolio Construction
-An "agent of agents" optimizer selects exactly 15 positions subject to:
-- 2-12% weight per position
+### Trading Rules
+- $1,000 starting capital, fractional shares allowed, stocks only
+- Max 15 concurrent positions
 - Max 35% in any single sector
-- Every position must have positive expected 6-month return
-- Max 3 positions per sector
+- Every position requires documented rationale, conviction level, and catalyst type
+- Both swing trades and intraday trades during market hours
 
-### Intraday Monitoring
-During market hours, a day-trading module monitors positions using 5-minute intraday data and evaluates whether material news or extreme moves warrant urgent trades. Conservative by design — most days it recommends nothing.
+## CLI Commands
 
-## Sector Coverage
+```bash
+# Initialize portfolio
+python portfolio_cli.py init
 
-Research is enforced across all 11 GICS sectors:
+# Portfolio status with live prices
+python portfolio_cli.py status
 
-| Sector | Min Candidates |
-|--------|---------------|
-| Technology | 5 |
-| Health Care | 4 |
-| Financials | 4 |
-| Consumer Discretionary | 4 |
-| Industrials | 4 |
-| Communication Services | 3 |
-| Consumer Staples | 3 |
-| Energy | 3 |
-| Utilities | 2 |
-| Real Estate | 2 |
-| Materials | 2 |
+# Execute a paper trade
+python portfolio_cli.py trade BUY AVGO 2.5 "AI chip demand catalyst" --conviction HIGH --catalyst earnings
+python portfolio_cli.py trade SELL MSFT 1.0 "Rotating out after weak guidance" --price 420.00
+
+# Daily snapshot (update prices + P&L)
+python portfolio_cli.py snapshot
+
+# Sector allocation breakdown
+python portfolio_cli.py sectors
+
+# Trade history with rationale
+python portfolio_cli.py history --last 20
+
+# S&P 500 watchlist
+python portfolio_cli.py watchlist              # sector summary
+python portfolio_cli.py watchlist --sector Tech  # drill into sector
+python portfolio_cli.py watchlist --scan         # scan for movers
+
+# Generate daily markdown report
+python portfolio_cli.py report
+```
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=your_key_here
 ```
 
-## Usage
+No API keys needed for the CLI. Claude Code handles all AI research directly.
 
-```bash
-# First run — full pipeline (screen, research, model, construct, trade)
-python run_pipeline.py --force-rebalance
+## Sector Coverage
 
-# Daily snapshot (update prices, P&L, sector performance)
-python run_pipeline.py --snapshot-only
+| Sector | GICS | Focus Areas |
+|--------|------|-------------|
+| Technology | IT | Semis, software, cloud, cybersecurity, AI infra |
+| Health Care | HC | Pharma, biotech, devices, managed care |
+| Financials | FN | Banks, insurance, capital markets, fintech |
+| Consumer Discretionary | CD | Retail, autos, travel, e-commerce |
+| Communication Services | CS | Media, telecom, gaming, streaming |
+| Industrials | IN | A&D, machinery, transport, engineering |
+| Consumer Staples | CS | Food, beverages, household products |
+| Energy | EN | Oil & gas, renewables, pipelines |
+| Utilities | UT | Electric, gas, water, renewables |
+| Real Estate | RE | REITs (data center, industrial, residential) |
+| Materials | MT | Chemicals, metals, mining, gold |
 
-# Intraday monitoring (day trades during market hours)
-python run_pipeline.py --intraday
+## Data
 
-# Rerun full pipeline and rebuild portfolio
-python run_pipeline.py --force-rebalance
-
-# Verbose logging
-python run_pipeline.py -v
-```
-
-## Data Sources
-
-All free:
-- **yfinance** — stock prices, fundamentals, analyst consensus, news, intraday bars
-- **Wikipedia** — Russell 1000 / S&P 500 constituent lists (with hardcoded fallback)
-
-## Project Structure
-
-```
-ad-capital-v0/
-  run_pipeline.py          # Main entry point
-  config.yaml              # Portfolio rules and model settings
-  src/
-    universe.py            # Russell 1000 universe fetcher
-    data_sources.py        # yfinance data layer
-    screener.py            # Stage 1: fundamental screening
-    research.py            # Stage 2: adversarial bull/bear debate
-    modeler.py             # Stage 3: scenario modeling
-    optimizer.py           # Stage 4: portfolio construction
-    portfolio.py           # Paper trading + P&L tracking
-    sectors.py             # GICS sector definitions + per-sector tracking
-    day_trader.py          # Intraday monitoring + day trades
-    report.py              # Daily markdown reports
-  data/
-    portfolio.json         # Current portfolio state (gitignored)
-    trades.json            # Full trade history (gitignored)
-    snapshots/             # Daily JSON snapshots (gitignored)
-    reports/               # Daily markdown reports (gitignored)
-    artifacts/             # Pipeline debug artifacts
-  .github/workflows/
-    daily_pipeline.yml     # Optional GitHub Actions automation
-```
+All free via yfinance:
+- Real-time and historical stock prices
+- Company fundamentals and analyst consensus
+- News headlines
+- Intraday 5-minute bars (during market hours)
+- S&P 500 constituents from Wikipedia
 
 ## Paper Trading
 
-This is a paper-trading system only. No real money is involved. Portfolio state is tracked in local JSON files.
-
-## Cost
-
-A full pipeline run makes roughly 100-150 Claude API calls (mostly Sonnet). Expect ~$1-3 per full rebalance. Daily snapshots and intraday monitoring are much cheaper (~$0.05 each).
+No real money. All trades are simulated with fractional share support. Portfolio state persists in local JSON files.
