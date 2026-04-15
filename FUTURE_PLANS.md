@@ -158,6 +158,41 @@ Run strategies against historical data directly from the CLI.
 - Compare live performance vs backtest expectations
 - **Implementation**: Significant effort, but stock_prediction already has the engine. Adapt to work without backtesting.py dependency.
 
+### Small Cap Pool (directive 2026-04-15)
+
+Current portfolio is 100% large-cap focused. Small caps have independent EV if researched well — this is a parallel pool to build out when market conditions favor it (rate cut cycle confirmed, AI mega-cap rally fatigues, or specific themes emerge like onshoring/defense/M&A).
+
+**Structure (mirror large cap):**
+- Small-cap sector fund (fundamental thesis-driven, same 11 GICS sectors)
+- Small-cap quant book (MFV3/TrendPullback signals on small-cap universe)
+- Independent allocation (NOT carved from existing $1k; would require new capital or deliberate reallocation)
+
+**Research discipline when scanning for opportunities:**
+- Don't limit scans to S&P 500 / mega-cap
+- Maintain a **separate small-cap watchlist pool** (Russell 2000 filtered, or themed baskets)
+- Run MFV3 on small caps independently (signals valid but more volatile)
+- Fundamental theses for small caps must cite specific differentiators (not just "cheap") — moat, contract wins, management, balance sheet
+
+**Themes to prioritize when activating:**
+- **Onshoring / tariff beneficiaries**: US manufacturing small caps (e.g. MP for rare earths)
+- **AI infra picks & shovels**: small/mid semi equipment, AI networking (e.g. CRDO, ACLS, CLS)
+- **Regional banks**: steeper yield curve beneficiaries
+- **SMR / nuclear**: small modular reactor pure plays (e.g. NNE) — very speculative
+- **M&A takeout targets**: strategically valuable small caps with weak balance sheets
+
+**Trigger conditions to activate the pool:**
+- Fed starts cutting aggressively (>2 cuts in a quarter)
+- Russell 2000 breaks multi-month downtrend with volume
+- Large-cap/small-cap relative valuation hits decile extreme (cheap)
+- Specific catalyst (tariff escalation, onshoring bill, M&A wave)
+
+**Size when activated:** Start with 5-10% of total portfolio. Scale up based on performance.
+
+**Implementation:**
+- `portfolio_cli.py` gains a `--pool small_cap` flag or separate `smallcap_portfolio.json`
+- Dedicated `quant scan` mode for small cap universe
+- Separate performance tracking vs Russell 2000 benchmark (not SPY)
+
 ---
 
 ## Notes
