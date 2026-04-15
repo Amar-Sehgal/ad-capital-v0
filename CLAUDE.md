@@ -51,11 +51,37 @@ python3 ~/personal/ad-capital-v0/portfolio_cli.py report          # daily report
 ## Portfolio Rules
 - Long only (buy and sell to 0, no shorting)
 - Fractional shares allowed, stocks only
-- Max 15 positions in sector fund
+- **No cap on position count** — if 100 stocks have equal conviction, buy all 100. Size proportionally to conviction.
 - Max 35% in any single GICS sector
 - Every sector fund position needs documented rationale, conviction (LOW/MEDIUM/HIGH), and catalyst type
 - Every quant trade needs strategy name, signal, entry rule, exit rule
 - 11 GICS sectors: Technology, Health Care, Financials, Consumer Discretionary, Communication Services, Industrials, Consumer Staples, Energy, Utilities, Real Estate, Materials
+
+## Operational Style (user directive, 2026-04-15)
+- **High-effort, broad, continuous analysis** — scan the full universe constantly, don't sit idle
+- **Proportional sizing by conviction**, not share price. HIGH ~$25-30, MED ~$10-15, LOW ~$3-7. Share count irrelevant; % exposure is what matters.
+- **Sector-level conviction shifts allowed**: if a sector thesis turns bullish/bearish, scale all holdings in that sector proportionally and reallocate to sectors with opposite conviction.
+  - Example: bearish oil → trim VLO/COP/OXY/HAL proportionally → redeploy to Utilities/AI infra
+- **Debate yourself adversarially** on every idea before execution. No hedging language.
+- **Serialize quant trades** — parallel `&` execution of `quant trade` causes JSON write race conditions (HAL trade lost once). Always run sequentially.
+- **Between check-ins**: run sector deep-dives (parallel Agent subagents OK), refresh MFV3 scans, update theses, identify sector-level shifts.
+
+## Fund Rules (explicit, 2026-04-15)
+- **Theses require time horizon + invalidation price**. Log both in trade rationale. Exit when invalidation price hits OR time horizon expires without thesis playing out.
+- **No portfolio-level drawdown trigger** — ride through, exit on thesis changes only.
+- **Concentration**: 35% sector cap is soft; OK to exceed with conviction. Single positions can exceed 10% if conviction HIGH.
+- **Capital between sector/quant books**: shift at your discretion. 70/30 is starting split, not constraint.
+- **Earnings**: hold through if thesis IS the earnings play. Otherwise position normally.
+- **Restricted names**: none.
+- **Cash buffer**: your discretion.
+- **Quant book**: mechanical -5% stops, +5% targets (keeps systematic character).
+
+## Time handling (critical)
+Your internal clock drifts. Always verify with:
+```bash
+python3 -c "from datetime import datetime; import zoneinfo; print(datetime.now(zoneinfo.ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d %H:%M PT'))"
+```
+During market hours (6:30 AM - 1:00 PM PT), tick as frequently as possible. Outside market hours, loop 1200-1800s.
 
 ## Current State (as of April 13, 2026)
 - Portfolio initialized: $700 sector fund + $300 quant book = $1,000
